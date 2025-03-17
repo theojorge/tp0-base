@@ -8,7 +8,19 @@ class Server:
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
+        self._running = True
 
+    def stop(self):
+        """Stops the server and closes the socket"""
+        logging.info("action: close_socket | result: in_progress")
+        self._running = False
+        try:
+            self._server_socket.shutdown(socket.SHUT_RDWR)
+            self._server_socket.close()
+            logging.info("action: close_socket | result: success")
+        except OSError as e:
+             logging.error(f"action: close_socket | result: error | error: {e}")
+        
     def run(self):
         """
         Dummy Server loop
@@ -20,10 +32,14 @@ class Server:
 
         # TODO: Modify this program to handle signal to graceful shutdown
         # the server
-        while True:
+        while self._running:
+         try:
             client_sock = self.__accept_new_connection()
             self.__handle_client_connection(client_sock)
-
+         except Exception as e:
+            logging.error(f"Error en el servidor: {e}")
+            self.stop() 
+            
     def __handle_client_connection(self, client_sock):
         """
         Read message from a specific client socket and closes the socket
