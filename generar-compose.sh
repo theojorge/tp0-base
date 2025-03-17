@@ -10,7 +10,7 @@ OUTPUT_FILE=$1
 CLIENT_COUNT=$2
 
 # Verifica que la cantidad de clientes sea un número entero positivo
-if ! [[ "$CLIENT_COUNT" =~ ^[0-9]+$ ]] || [ "$CLIENT_COUNT" -lt 1 ]; then
+if ! [[ "$CLIENT_COUNT" =~ ^[0-9]+$ ]] || [ "$CLIENT_COUNT" -lt 0 ]; then
     echo "Uso: La cantidad de clientes debe ser un número entero positivo."
     exit 1
 fi

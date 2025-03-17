@@ -198,3 +198,17 @@ El script deberá ubicarse en la raíz del proyecto y recibirá por parámetro e
 que es el nombre utilizado por defecto en el Makefile, será necesario ejecutarlo manualmente o modificar el Makefile para que utilice el nombre correcto. Para hacerlo manualmente, primero se deben crear las imágenes ejecutando make docker-image. Luego, se lanza el contenedor con docker compose -f <nombre_archivo_salida> up -d --build.
 
 El script también maneja errores en los parámetros de entrada, como ingresar un valor no numérico o negativo para la cantidad de clientes, o una cantidad incorrecta de argumentos, o un formato de archivo distinto de .yml o .yaml. En estos casos, se muestra un mensaje de error y el script se detiene.
+
+### Ejercicio 3:
+
+Se ha creado un script llamado `validar-echo-server.sh` que verifica el correcto funcionamiento del servidor echo utilizando `netcat`.
+
+Para ejecutar el script de validación, asegúrate de que el servidor esté en funcionamiento y ejecuta:
+
+```bash
+./validar-echo-server.sh
+```
+
+Esto permitirá verificar que el servidor echo esté funcionando correctamente.
+
+Se realizó un cambio en el script `generar-compose.sh` para que acepte 0 como cantidad de clientes. Este ajuste fue necesario para que los tests del Ejercicio 3 funcionen correctamente, permitiendo así la ejecución de pruebas sin requerir un número mínimo de clientes.
