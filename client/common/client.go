@@ -57,7 +57,8 @@ func (c *Client) StartClientLoop() {
 	// There is an autoincremental msgID to identify every message sent
 	// Messages if the message amount threshold has not been surpassed
 	for msgID := 1; msgID <= c.config.LoopAmount; msgID++ {
-		// Create the connection the server in every loop iteration. Send an
+		// Create the connection the server in every loop iteration. 
+
 		c.createClientSocket()
 
 		// TODO: Modify the send to avoid short-write
@@ -67,7 +68,9 @@ func (c *Client) StartClientLoop() {
 			c.config.ID,
 			msgID,
 		)
+
 		msg, err := bufio.NewReader(c.conn).ReadString('\n')
+        
 		if c.conn != nil {
  			log.Infof("action: close_connection_after_use | result: in_progress | client_id: %v", c.config.ID)
  			c.conn.Close()
@@ -88,24 +91,32 @@ func (c *Client) StartClientLoop() {
 			msg,
 		)
 
-		select {
-        case <-c.stopCh:
-            log.Infof("action: client_stopped | result: success | client_id: %v", c.config.ID)
+        if c.sleepWithStopCheck(c.config.LoopPeriod) {
             return
-        default:
-            time.Sleep(c.config.LoopPeriod)
         }
+        
 
 	}
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
+func (c *Client) sleepWithStopCheck(duration time.Duration) bool {
+    select {
+    case <-c.stopCh:
+        log.Infof("action: client_stopped | result: success | client_id: %v", c.config.ID)
+        if c.conn != nil {
+         log.Infof("action: close_socket | result: in_progress | client_id: %v", c.config.ID)
+         c.conn.Close() 
+		 log.Infof("action: close_socket | result: success | client_id: %v", c.config.ID)
+         c.conn = nil
+        }
+        return true
+    case <-time.After(duration):
+        return false
+    }
+}
+
+
 func (c *Client) Stop() {
     close(c.stopCh)
-    if c.conn != nil {
-        log.Infof("action: close_socket | result: in_progress | client_id: %v", c.config.ID)
-        c.conn.Close() 
-		log.Infof("action: close_socket | result: success | client_id: %v", c.config.ID)
-        c.conn = nil
-    }
 }
