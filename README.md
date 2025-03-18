@@ -222,3 +222,54 @@ En la implementación del cliente, he agregado un manejador de señales que capt
 Para el servidor, he añadido una función manejadora de señales para SIGTERM y mejorado el método stop(). Este método ahora registra el inicio del cierre del socket, establece una bandera de ejecución en falso, cierra correctamente el socket utilizando SHUT_RDWR, y registra el cierre exitoso del socket, manejando también posibles errores durante este proceso.
 
 Además, se ha implementado un sistema de logging estructurado para todas las operaciones, que registra eventos como action: shutdown_initiated al recibir SIGTERM, así como action: close_connection y action: close_socket durante el cierre de recursos.
+
+### Ejercicio 5
+
+El protocolo se basa en la serialización de varios campos de datos que se envían entre el cliente y el servidor. Los datos están organizados en bloques de información, cada uno con un identificador y longitud específica. A continuación, se describe la estructura detallada de los datos enviados.
+
+## Campos del Protocolo
+
+Los siguientes campos están involucrados en el protocolo de comunicación:
+
+- **Agencia (1 byte)**: Este campo representa el identificador de la agencia (un número entre 1 y 255). Este campo no tiene un identificador asociado y se transmite como el primer byte con su valor.
+
+- **NOMBRE (1 byte de longitud + N bytes de valor)**: Este campo almacena el nombre del cliente. La longitud del nombre está indicada por el primer byte, y los bytes siguientes contienen el valor del nombre.
+
+- **APELLIDO (1 byte de longitud + N bytes de valor)**: Similar al campo NOMBRE, este campo contiene el apellido del cliente. La longitud se especifica con un byte, y los bytes siguientes contienen el valor del apellido.
+
+- **DNI (1 byte de longitud + N bytes de valor)**: El número de documento de identidad del cliente. Al igual que los otros campos, su longitud está indicada por el primer byte y el valor por los bytes siguientes.
+
+- **NACIMIENTO (1 byte de longitud + N bytes de valor)**: Fecha de nacimiento del cliente en formato de texto. Este campo se estructura de la misma forma que los anteriores.
+
+- **NUMERO (1 byte de longitud + N bytes de valor)**: El número de apuesta proporcionado por el cliente. Este campo también sigue el mismo formato que los anteriores.
+
+## Especificaciones
+
+**Endianess**: Los campos que requieren longitud (por ejemplo, los campos de texto) se codifican en Big Endian.
+**Longitud de los Campos**: Cada campo tiene un byte que indica su longitud. Este valor de longitud es un número entero de 1 byte (valor máximo de 255), por lo que los campos no pueden exceder los 255 bytes.
+
+## Respuesta del Servidor
+
+El servidor responde con un byte que indica si la operación fue exitosa o no:
+
+- **STATUS_SUCCESS (0x01)**: Indica que la apuesta fue procesada con éxito.
+- **STATUS_ERROR (0x00)**: Indica que ocurrió un error en el procesamiento de la apuesta.
+
+## Flujo de Comunicación
+
+El flujo de comunicación entre el cliente y el servidor sigue estos pasos:
+
+1. **Cliente**: El cliente primero envía los datos en el siguiente orden:
+
+   - Agencia (1 byte)
+   - Nombre
+   - Apellido
+   - DNI
+   - Nacimiento
+   - Número de apuesta
+
+2. **Servidor**: El servidor procesa los datos, los almacena (o maneja cualquier error que ocurra) y devuelve una respuesta de éxito o error mediante un solo byte.
+
+## Detalles del Cliente
+
+El cliente envía el mismo bet de manera continua en un bucle en `StartClientLoop`, utilizando las variables de entorno para definir los valores a enviar. Si alguna de estas variables de entorno no está definida, el cliente recurrirá a valores predeterminados. Este enfoque se implementa porque el objetivo principal del ejercicio es el protocolo de comunicación. Entonces parte del comportamiento del cliente de los ejercicios anteriores se mantuvo ya que lo que se espera es que el cliente reciba como variables de entorno los campos que representan la apuesta de una persona y los envíe al servidor.

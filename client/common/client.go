@@ -1,15 +1,22 @@
 package common
 
 import (
-	"bufio"
-	"fmt"
+    "os"
 	"net"
 	"time"
-
 	"github.com/op/go-logging"
+ 
 )
 
 var log = logging.MustGetLogger("log")
+
+const (
+	DefaultNombre     = "Santiago Lionel"
+	DefaultApellido   = "Lorca"
+	DefaultDocumento  = "30904465"
+	DefaultNacimiento = "1999-03-17"
+	DefaultNumero     = "7574"
+)
 
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
@@ -24,6 +31,7 @@ type Client struct {
 	config ClientConfig
 	conn   net.Conn
     stopCh chan struct{}
+    protocol ProtocolClient
 }
 
 // NewClient Initializes a new client receiving the configuration
@@ -49,7 +57,38 @@ func (c *Client) createClientSocket() error {
 		)
 	}
 	c.conn = conn
+	c.protocol = ProtocolClient{conn: c.conn,}
+
 	return nil
+}
+
+func get_bet(agenciaID string) Bet {
+
+    nombre := getEnvOrDefault("NOMBRE", DefaultNombre)
+    apellido := getEnvOrDefault("APELLIDO", DefaultApellido)
+    documento := getEnvOrDefault("DOCUMENTO", DefaultDocumento)
+    nacimiento := getEnvOrDefault("NACIMIENTO", DefaultNacimiento)
+    numero := getEnvOrDefault("NUMERO", DefaultNumero)
+    
+ 
+    bet := Bet{
+        Agencia:    agenciaID,
+        Nombre:     nombre,
+        Apellido:   apellido,
+        DNI:        documento,
+        Nacimiento: nacimiento,
+        Numero:     numero,
+    }
+    
+    return bet
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+    value := os.Getenv(key)
+    if value == "" {
+        return defaultValue
+    }
+    return value
 }
 
 // StartClientLoop Send messages to the client until some time threshold is met
@@ -60,36 +99,11 @@ func (c *Client) StartClientLoop() {
 		// Create the connection the server in every loop iteration. 
 
 		c.createClientSocket()
+       
+		bet := get_bet(c.config.ID)
 
-		// TODO: Modify the send to avoid short-write
-		fmt.Fprintf(
-			c.conn,
-			"[CLIENT %v] Message N°%v\n",
-			c.config.ID,
-			msgID,
-		)
-
-		msg, err := bufio.NewReader(c.conn).ReadString('\n')
-        
-		if c.conn != nil {
- 			log.Infof("action: close_connection_after_use | result: in_progress | client_id: %v", c.config.ID)
- 			c.conn.Close()
- 			log.Infof("action: close_connection_after_use | result: success | client_id: %v", c.config.ID)
- 			c.conn = nil
- 		}
-
-		if err != nil {
-			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			return
-		}
-
-		log.Infof("action: receive_message | result: success | client_id: %v | msg: %v",
-			c.config.ID,
-			msg,
-		)
+	    // Sends the bet to the server
+	    c.protocol.send_bet(bet)
 
         if c.sleepWithStopCheck(c.config.LoopPeriod) {
             return
