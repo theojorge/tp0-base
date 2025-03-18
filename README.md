@@ -212,3 +212,13 @@ Para ejecutar el script de validación, asegúrate de que el servidor esté en f
 Esto permitirá verificar que el servidor echo esté funcionando correctamente.
 
 Se realizó un cambio en el script `generar-compose.sh` para que acepte 0 como cantidad de clientes. Este ajuste fue necesario para que los tests del Ejercicio 3 funcionen correctamente, permitiendo así la ejecución de pruebas sin requerir un número mínimo de clientes.
+
+### Ejercicio 4:
+
+He modificado tanto el servidor como el cliente para manejar de manera adecuada las señales SIGTERM, asegurando que todos los recursos (descriptores de archivo, sockets, etc.) se cierren correctamente antes de que la aplicación principal finalice.
+
+En la implementación del cliente, he agregado un manejador de señales que captura SIGTERM. También implementé un método Stop() que registra el inicio del proceso de cierre de la conexión, cierra la conexión, establece la conexión como nula tras un cierre exitoso y registra el cierre exitoso de la conexión. Este método es invocado por el manejador de señales cuando se recibe SIGTERM.
+
+Para el servidor, he añadido una función manejadora de señales para SIGTERM y mejorado el método stop(). Este método ahora registra el inicio del cierre del socket, establece una bandera de ejecución en falso, cierra correctamente el socket utilizando SHUT_RDWR, y registra el cierre exitoso del socket, manejando también posibles errores durante este proceso.
+
+Además, se ha implementado un sistema de logging estructurado para todas las operaciones, que registra eventos como action: shutdown_initiated al recibir SIGTERM, así como action: close_connection y action: close_socket durante el cierre de recursos.
