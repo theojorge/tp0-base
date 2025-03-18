@@ -217,7 +217,7 @@ Se realizó un cambio en el script `generar-compose.sh` para que acepte 0 como c
 
 He modificado tanto el servidor como el cliente para manejar de manera adecuada las señales SIGTERM, asegurando que todos los recursos (descriptores de archivo, sockets, etc.) se cierren correctamente antes de que la aplicación principal finalice.
 
-En la implementación del cliente, he agregado un manejador de señales que captura SIGTERM. También implementé un método Stop() que registra el inicio del proceso de cierre de la conexión, cierra la conexión, establece la conexión como nula tras un cierre exitoso y registra el cierre exitoso de la conexión. Este método es invocado por el manejador de señales cuando se recibe SIGTERM.
+En la implementación del cliente, he agregado un manejador de señales que captura SIGTERM. También implementé un método Stop() que utiliza un canal `stopCh chan struct{}` como mecanismo principal para coordinar la detención del loop del cliente. Sin embargo, si la ejecución está bloqueada en la operación `ReadString('\n')`, la verificación del canal `stopCh` no podrá realizarse hasta que la operación de lectura se complete o falle. Además de utilizar el canal, cierra la conexión, establece la conexión como nula tras un cierre exitoso y registra el cierre exitoso de la conexión. Este método es invocado por el manejador de señales cuando se recibe SIGTERM.
 
 Para el servidor, he añadido una función manejadora de señales para SIGTERM y mejorado el método stop(). Este método ahora registra el inicio del cierre del socket, establece una bandera de ejecución en falso, cierra correctamente el socket utilizando SHUT_RDWR, y registra el cierre exitoso del socket, manejando también posibles errores durante este proceso.
 

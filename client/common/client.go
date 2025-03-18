@@ -23,6 +23,7 @@ type ClientConfig struct {
 type Client struct {
 	config ClientConfig
 	conn   net.Conn
+    stopCh chan struct{}
 }
 
 // NewClient Initializes a new client receiving the configuration
@@ -30,6 +31,7 @@ type Client struct {
 func NewClient(config ClientConfig) *Client {
 	client := &Client{
 		config: config,
+        stopCh: make(chan struct{}),
 	}
 	return client
 }
@@ -66,7 +68,12 @@ func (c *Client) StartClientLoop() {
 			msgID,
 		)
 		msg, err := bufio.NewReader(c.conn).ReadString('\n')
-		c.conn.Close()
+		if c.conn != nil {
+ 			log.Infof("action: close_connection_after_use | result: in_progress | client_id: %v", c.config.ID)
+ 			c.conn.Close()
+ 			log.Infof("action: close_connection_after_use | result: success | client_id: %v", c.config.ID)
+ 			c.conn = nil
+ 		}
 
 		if err != nil {
 			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
@@ -81,18 +88,24 @@ func (c *Client) StartClientLoop() {
 			msg,
 		)
 
-		// Wait a time between sending one message and the next one
-		time.Sleep(c.config.LoopPeriod)
+		select {
+        case <-c.stopCh:
+            log.Infof("action: client_stopped | result: success | client_id: %v", c.config.ID)
+            return
+        default:
+            time.Sleep(c.config.LoopPeriod)
+        }
 
 	}
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
 func (c *Client) Stop() {
+    close(c.stopCh)
     if c.conn != nil {
-        log.Infof("action: close_connection | result: in_progress | client_id: %v", c.config.ID)
+        log.Infof("action: close_socket | result: in_progress | client_id: %v", c.config.ID)
         c.conn.Close() 
-		log.Infof("action: close_connection | result: success | client_id: %v", c.config.ID)
+		log.Infof("action: close_socket | result: success | client_id: %v", c.config.ID)
         c.conn = nil
     }
 }
