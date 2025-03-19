@@ -223,15 +223,15 @@ Para el servidor, he añadido una función manejadora de señales para SIGTERM y
 
 Además, se ha implementado un sistema de logging estructurado para todas las operaciones, que registra eventos como action: shutdown_initiated al recibir SIGTERM, así como action: close_connection y action: close_socket durante el cierre de recursos.
 
-## Ejercicio 4: Actualización
+### Ejercicio 4: Actualización
 
 Este ejercicio implementa una mejora en el mecanismo de cierre del servidor, reemplazando el enfoque anterior de `shutdown` + `sys.exit(0)` por un método más elegante que utiliza un socket ficticio (dummy socket) para interrumpir el bloqueo causado por la llamada `accept()`.
 
-### Problema a Resolver
+#### Problema a Resolver
 
 El servidor TCP queda bloqueado en la llamada `accept()` cuando está esperando conexiones entrantes. Cuando se desea cerrar el servidor (por ejemplo, al recibir una señal `SIGTERM`), el hilo principal queda bloqueado en esta llamada, lo que impide un cierre limpio y ordenado del servidor.
 
-### Solución Implementada
+#### Solución Implementada
 
 Para resolver este problema, se ha implementado una técnica que consiste en:
 
@@ -239,8 +239,6 @@ Para resolver este problema, se ha implementado una técnica que consiste en:
 2. Crear un socket dummy que se conecta al propio servidor.
 3. Esta conexión hace que el método `accept()` se desbloquee.
 4. Al salir del bloqueo, se verifica el estado `self._running` para decidir si continuar o terminar.
-
-### Código Clave de la Implementación
 
 #### Método de Detención del Servidor
 
@@ -280,7 +278,7 @@ self._server_socket.close()
 logging.info("action: close_socket | result: success")
 ```
 
-### Flujo de Ejecución
+#### Flujo de Ejecución
 
 1. **Estado Normal de Ejecución**:
 
@@ -304,14 +302,14 @@ logging.info("action: close_socket | result: success")
    - Se cierra correctamente el socket del servidor con `shutdown()` y `close()`.
    - Se registra el cierre exitoso en el log.
 
-### Ventajas de Esta Implementación
+#### Ventajas de Esta Implementación
 
 - **Cierre Limpio**: Permite que el servidor se cierre de manera ordenada.
 - **No Forzado**: Evita el uso de `sys.exit(0)` que termina abruptamente la ejecución.
 - **Robusto**: Maneja correctamente los errores que pueden ocurrir durante el cierre.
 - **Controlado**: Permite un adecuado manejo de recursos antes de finalizar.
 
-### Consideraciones de Implementación
+#### Consideraciones de Implementación
 
 - Es crucial verificar `self._running` después de `accept()` para ignorar la conexión del socket dummy.
 - El método `shutdown()` se utiliza tanto en el socket dummy como en el socket del servidor para asegurar un cierre completo.
@@ -368,13 +366,11 @@ El flujo de comunicación entre el cliente y el servidor sigue estos pasos:
 
 El cliente envía el mismo bet de manera continua en un bucle en `StartClientLoop`, utilizando las variables de entorno para definir los valores a enviar. Si alguna de estas variables de entorno no está definida, el cliente recurrirá a valores predeterminados. Este enfoque se implementa porque el objetivo principal del ejercicio es el protocolo de comunicación. Entonces parte del comportamiento del cliente de los ejercicios anteriores se mantuvo ya que lo que se espera es que el cliente reciba como variables de entorno los campos que representan la apuesta de una persona y los envíe al servidor.
 
-# Ejercicio 6
-
-## Descripción General
+### Ejercicio 6
 
 Este ejercicio implementa un sistema de procesamiento de apuestas en batch con ajustes dinámicos basados en restricciones de tamaño y cantidad. El sistema optimiza la transmisión de datos entre clientes y servidor, evitando la pérdida de apuestas debido a limitaciones en el buffer de salida.
 
-## Características Principales
+#### Características Principales
 
 - **Ajuste dinámico de batches**: El sistema ajusta automáticamente el número de apuestas por batch según dos restricciones:
 
@@ -385,9 +381,7 @@ Este ejercicio implementa un sistema de procesamiento de apuestas en batch con a
 
 - **Configuración flexible**: Los parámetros de batch se definen en `config.yaml` bajo la clave `batch: maxAmount`.
 
-## Funcionamiento del Sistema
-
-### Cliente
+#### Cliente
 
 1. **Lectura de datos**: Cada cliente lee apuestas desde su archivo correspondiente en `.data/agency-{N}.csv`.
 
@@ -415,7 +409,7 @@ Este ejercicio implementa un sistema de procesamiento de apuestas en batch con a
 
    Las apuestas no enviadas se guardan para el siguiente batch.
 
-### Servidor
+#### Servidor
 
 1. **Procesamiento de batches**: El servidor procesa cada batch recibido.
 
@@ -429,7 +423,7 @@ Este ejercicio implementa un sistema de procesamiento de apuestas en batch con a
      INFO action: apuesta_recibida | result: fail | cantidad: {CANTIDAD_DE_APUESTAS}
      ```
 
-## Parámetros de Configuración
+#### Parámetros de Configuración
 
 Los parámetros del sistema se definen en `config.yaml`:
 
@@ -438,17 +432,13 @@ batch:
   maxAmount: Número máximo de apuestas por batch (se ajustará automáticamente si es necesario)
 ```
 
-## Limitaciones y Consideraciones
+#### Limitaciones y Consideraciones
 
 - Máximo 255 apuestas por batch (limitación de representación en 1 byte).
 - Tamaño máximo de batch de 8KB.
 - Los nombres, apellidos, DNIs, fechas de nacimiento y números de apuesta deben poder representarse cada uno con una longitud en 1 byte.
 
-## Configuración con Docker
-
-El sistema utiliza Docker para su implementación, con la siguiente configuración:
-
-### Actualización del Generador de Docker-Compose
+#### Actualización del Generador de Docker-Compose
 
 Se ha actualizado el script `generar_compose.py` para incluir automáticamente los archivos CSV de apuestas en los volúmenes de los contenedores cliente. La parte clave del código que implementa esta funcionalidad es:
 
@@ -474,7 +464,7 @@ for i in range(1, num_clientes + 1):
     }
 ```
 
-### Funcionamiento de los Volúmenes
+#### Funcionamiento de los Volúmenes
 
 El sistema carga los archivos CSV de apuestas desde un directorio host `.data/` y los mapea dentro de cada contenedor cliente:
 
