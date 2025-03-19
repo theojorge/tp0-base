@@ -55,10 +55,10 @@ def main():
     def signal_handler(signum, frame):
         logging.info('action: shutdown_initiated | result: success | signal: SIGTERM')
         server.stop()  
-        sys.exit(0)
 
     signal.signal(signal.SIGTERM, signal_handler)
     server.run()
+    
 
 def initialize_log(logging_level):
     """

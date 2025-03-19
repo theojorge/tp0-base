@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
-	"strconv"
+	
 )
 
 // Definir constantes para los identificadores de los campos
@@ -13,86 +13,92 @@ const (
 	STATUS_ERROR   = 0x00
 )
 
-type Bet struct {
-	Agencia    string
-	Nombre     string
-	Apellido   string
-	DNI        string
-	Nacimiento string
-	Numero     string
-}
-
 type ProtocolClient struct {
 	conn net.Conn
 }
 
-// Serializa los datos de Bet en el formato: [Agencia][Longitud][Campo 1][Longitud][Campo 2]... [Longitud][Campo n]
-func (p *ProtocolClient) serialize(bet Bet) ([]byte, error) {
+func (p *ProtocolClient) serialize(bets []Bet, agencia int) ([]byte, int, []Bet, error) {
 	var buffer bytes.Buffer
 
-	// Convertir agencia a entero y asegurarse de que esté en el rango de 0-255
-	agencia, err := strconv.Atoi(bet.Agencia)
-	if err != nil {
-		fmt.Println("Error al convertir Agencia a int:", err)
-		return nil, err
-	}
 	if agencia < 0 || agencia > 255 {
-		return nil, fmt.Errorf("El número de agencia debe estar entre 0 y 255")
+		return nil, 0, nil, fmt.Errorf("El número de agencia debe estar entre 0 y 255")
 	}
 
-	// Escribir 1 byte con la agencia
-	if err := buffer.WriteByte(byte(agencia)); err != nil {
-		return nil, err
+
+	// Escribir el byte de agencia
+	buffer.WriteByte(byte(agencia))
+
+	// Posición donde escribiremos el tamaño del batch
+	batchPos := buffer.Len()
+	buffer.WriteByte(0) // Placeholder para el batchSize
+
+	validBets := 0 // Contador de apuestas válidas
+    var remainingBets []Bet // Contador de apuestas sobrantes
+
+	if len(bets) > 255 {
+        log.Warningf("BatchSize (%d) excede el límite de 1 byte. Se procesarán solo 255 apuestas.", len(bets))
+		bets = bets[:255]
+		// Las apuestas que exceden 255 van directamente a remainingBets
+		remainingBets = bets[255:]
 	}
 
 	// Función auxiliar para escribir los campos con su longitud (1 byte) y su valor
-	writeField := func(data string) error {
-		// Escribir la longitud del campo (1 byte)
-		if len(data) > 255 {
-			return fmt.Errorf("El campo excede el límite de 255 bytes")
+	writeField := func(data string) bool {
+		fieldSize := len(data) + 1 // 1 byte para la longitud del campo
+		if buffer.Len()+fieldSize > 8192 {
+			return false // Indica que no hay espacio suficiente
 		}
-		if err := buffer.WriteByte(byte(len(data))); err != nil {
-			return err
-		}
-		// Escribir el valor del campo
-		_, err := buffer.Write([]byte(data))
-		return err
+
+		buffer.WriteByte(byte(len(data))) // Escribir longitud
+		buffer.Write([]byte(data))        // Escribir contenido
+		return true
 	}
 
-	// Serializar cada campo con su longitud y valor
-	if err := writeField(bet.Nombre); err != nil {
-		return nil, err
-	}
-	if err := writeField(bet.Apellido); err != nil {
-		return nil, err
-	}
-	if err := writeField(bet.DNI); err != nil {
-		return nil, err
-	}
-	if err := writeField(bet.Nacimiento); err != nil {
-		return nil, err
-	}
-	if err := writeField(bet.Numero); err != nil {
-		return nil, err
+	// Serializar cada apuesta en el batch
+	for i, bet := range bets {
+		startSize := buffer.Len() // Guardamos el tamaño antes de escribir la apuesta
+
+        if len(bet.Nombre) > 255 || len(bet.Apellido) > 255 || len(bet.DNI) > 255 ||
+			len(bet.Nacimiento) > 255 || len(bet.Numero) > 255 {
+			fmt.Println("Error: Un campo en esta apuesta excede los 255 bytes, se omite esta apuesta.")
+			continue // Salta esta apuesta y sigue con la siguiente
+		}
+
+		// Intentamos escribir los campos de la apuesta
+		if !writeField(bet.Nombre) || !writeField(bet.Apellido) || !writeField(bet.DNI) ||
+			!writeField(bet.Nacimiento) || !writeField(bet.Numero) {
+            // Si no entra en el buffer, revertimos esta apuesta y cortamos el loop
+		    buffer.Truncate(startSize)
+            log.Warningf("BatchSize (%d) exceden los 8kb. Se ajustará a %d.", len(bets), validBets)
+            remainingBets = append(bets[i:], remainingBets...)
+			break 
+		}
+
+		validBets++ // Solo se incrementa si la apuesta completa se añadió correctamente
 	}
 
-	return buffer.Bytes(), nil
+	// Escribir el tamaño real del batch en la posición reservada
+	buffer.Bytes()[batchPos] = byte(validBets)
+
+	return buffer.Bytes(), validBets, remainingBets, nil
 }
 
 
-func (p *ProtocolClient) send_bet(bet Bet) {
+
+func (p *ProtocolClient) send_bets(bets []Bet, agencia int) (int, []Bet) {
+
 	// Serializar los datos antes de enviarlos
-	data, err := p.serialize(bet)
+	data, cantBets, remainingBets, err := p.serialize(bets, agencia)
 	if err != nil {
 		fmt.Println("Error al serializar los datos:", err)
-		return
+		return 0, nil
 	}
 
 	// Enviar los datos al servidor
 	_, err = p.conn.Write(data)
 	if err != nil {
 		fmt.Println("Error al enviar los datos:", err)
-		return
+		return 0, nil
 	}
 
 	// Recibir solo 1 byte de respuesta del servidor
@@ -100,21 +106,24 @@ func (p *ProtocolClient) send_bet(bet Bet) {
 	n, err := p.conn.Read(buffer)
 	if err != nil {
 		fmt.Println("Error al recibir la respuesta:", err)
-		return
+		return 0, nil
 	}
 
 	// Verificar que realmente se haya leído 1 byte
 	if n != 1 {
 		fmt.Println("Error: No se recibió el byte esperado")
-		return
+		return 0, nil
 	}
-
+ 
 	// Interpretar la respuesta del servidor
 	if buffer[0] == STATUS_SUCCESS {
-		log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %s\n", bet.DNI, bet.Numero)
+		log.Infof("action: apuesta_enviadas | result: success | cantidad: %d", cantBets)
+        return cantBets, remainingBets
 	} else if buffer[0] == STATUS_ERROR {
-		log.Infof("action: apuesta_enviada | result: error")
+		log.Infof("action: apuesta_enviadas | result: error")
+        return 0, nil
 	} else {
 		fmt.Printf("Respuesta desconocida del servidor: %x\n", buffer[0])
+        return 0, nil
 	}
 }

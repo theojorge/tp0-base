@@ -1,11 +1,11 @@
 package common
 
 import (
-    "os"
 	"net"
+    "fmt"
 	"time"
 	"github.com/op/go-logging"
- 
+     "strconv"
 )
 
 var log = logging.MustGetLogger("log")
@@ -24,6 +24,7 @@ type ClientConfig struct {
 	ServerAddress string
 	LoopAmount    int
 	LoopPeriod    time.Duration
+    BatchSize     int
 }
 
 // Client Entity that encapsulates how
@@ -47,7 +48,7 @@ func NewClient(config ClientConfig) *Client {
 // CreateClientSocket Initializes client socket. In case of
 // failure, error is printed in stdout/stderr and exit 1
 // is returned
-func (c *Client) createClientSocket() error {
+func (c *Client) createClientSocket() bool {
 	conn, err := net.Dial("tcp", c.config.ServerAddress)
 	if err != nil {
 		log.Criticalf(
@@ -55,56 +56,61 @@ func (c *Client) createClientSocket() error {
 			c.config.ID,
 			err,
 		)
+        return false 
 	}
 	c.conn = conn
 	c.protocol = ProtocolClient{conn: c.conn,}
 
-	return nil
-}
-
-func get_bet(agenciaID string) Bet {
-
-    nombre := getEnvOrDefault("NOMBRE", DefaultNombre)
-    apellido := getEnvOrDefault("APELLIDO", DefaultApellido)
-    documento := getEnvOrDefault("DOCUMENTO", DefaultDocumento)
-    nacimiento := getEnvOrDefault("NACIMIENTO", DefaultNacimiento)
-    numero := getEnvOrDefault("NUMERO", DefaultNumero)
-    
- 
-    bet := Bet{
-        Agencia:    agenciaID,
-        Nombre:     nombre,
-        Apellido:   apellido,
-        DNI:        documento,
-        Nacimiento: nacimiento,
-        Numero:     numero,
-    }
-    
-    return bet
-}
-
-func getEnvOrDefault(key, defaultValue string) string {
-    value := os.Getenv(key)
-    if value == "" {
-        return defaultValue
-    }
-    return value
+	return true
 }
 
 // StartClientLoop Send messages to the client until some time threshold is met
 func (c *Client) StartClientLoop() {
+
 	// There is an autoincremental msgID to identify every message sent
 	// Messages if the message amount threshold has not been surpassed
-	for msgID := 1; msgID <= c.config.LoopAmount; msgID++ {
-		// Create the connection the server in every loop iteration. 
+    agencyID, err := strconv.Atoi(c.config.ID)
+	if err != nil {
+		log.Errorf("Error al convertir ID de agencia a int: %v", err)
+		return
+	}
 
-		c.createClientSocket()
-       
-		bet := get_bet(c.config.ID)
+    betsReader, err := NewBetsReader(fmt.Sprintf("/agency-%d.csv", agencyID))
+    if err != nil {
+        log.Errorf("Error al abrir archivo de apuestas: %v", err)
+        return
+    }
+    defer betsReader.Close()
 
-	    // Sends the bet to the server
-	    c.protocol.send_bet(bet)
+    adjustedBatchSize := c.config.BatchSize
+    var remainingBets []Bet
 
+	for {
+        adjustedBatchSize = c.config.BatchSize - len(remainingBets)
+
+        newBets, err := betsReader.GetBatch(adjustedBatchSize)
+        if err != nil {
+            log.Errorf("Error al obtener batch de apuestas: %v", err)
+            return
+        }
+
+        log.Infof("Nuevas apuestas obtenidas: %d", len(newBets))
+        bets := append(remainingBets, newBets...)
+        log.Infof("Total de apuestas después de combinar: %d", len(bets))
+
+        if len(bets) == 0 {
+            break
+        }
+
+        // Create the connection the server in every loop iteration. 
+        if !c.createClientSocket() {
+          return  
+        }
+
+	    // Sends the bet to the server and if it sends less than the batch it updates to not lose more bets.
+	    c.config.BatchSize, remainingBets = c.protocol.send_bets(bets, agencyID)
+        log.Infof("Apuestas restantes después de enviar: %d", len(remainingBets))
+      
         if c.sleepWithStopCheck(c.config.LoopPeriod) {
             return
         }

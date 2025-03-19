@@ -2,6 +2,7 @@
 
 import sys
 import yaml
+import os
 
 def generar_compose(nombre_archivo, num_clientes):
     try:
@@ -45,22 +46,25 @@ def generar_compose(nombre_archivo, num_clientes):
     }
 
     # Configuración de los clientes
-    client_configs = {
-        f"client{i}": {
-            "container_name": f"client{i}",
+    client_configs = {}
+    for i in range(1, num_clientes + 1):
+        client_name = f"client{i}"
+        csv_filename = f"agency-{i}.csv"
+        
+        client_configs[client_name] = {
+            "container_name": client_name,
             "image": "client:latest",
             "entrypoint": "/client",
             "environment": [
                 f"CLI_ID={i}",
             ],
             "volumes": [
-                "./client/config.yaml:/config.yaml"
+                "./client/config.yaml:/config.yaml",
+                f"./.data/{csv_filename}:/{csv_filename}"
             ],
             "networks": ["testing_net"],
             "depends_on": ["server"]
         }
-        for i in range(1, num_clientes + 1)
-    }
 
     # Estructura final del archivo Docker Compose
     compose = {

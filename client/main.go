@@ -37,6 +37,7 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("server", "address")
 	v.BindEnv("loop", "period")
 	v.BindEnv("loop", "amount")
+    v.BindEnv("batch", "amount")
 	v.BindEnv("log", "level")
 
 	// Try to read configuration from config file. If config file
@@ -110,6 +111,7 @@ func main() {
 		ID:            v.GetString("id"),
 		LoopAmount:    v.GetInt("loop.amount"),
 		LoopPeriod:    v.GetDuration("loop.period"),
+        BatchSize:     v.GetInt("batch.maxAmount"),
 	}
 
 	client := common.NewClient(clientConfig)
@@ -124,6 +126,4 @@ func main() {
  	}()
 
 	client.StartClientLoop()
-	
-    
 }

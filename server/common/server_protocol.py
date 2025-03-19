@@ -1,6 +1,4 @@
 import logging
-import socket
-import struct
 from .utils import store_bets, Bet
 
 class ServerProtocol:
@@ -19,51 +17,77 @@ class ServerProtocol:
         return data
 
     def handle_client(self, conn):
-        """Procesa la conexión del cliente leyendo los campos, almacenando la apuesta y enviando respuesta."""
+        """Procesa la conexión del cliente leyendo apuestas en batch."""
         try:
-            fields = {}
-            
-            # Leer 1 byte: la agencia
+            # Leer 1 byte: Agencia
             agency_byte = self.read_exact(conn, 1)
             agency = agency_byte[0]
 
-            # Se esperan 5 campos, sin necesidad de identificador
+            # Leer 1 byte: Batch Size (Cantidad de apuestas en el mensaje)
+            batch_size_byte = self.read_exact(conn, 1)
+            batch_size = batch_size_byte[0]
+
+            bets = []  # Lista para almacenar todas las apuestas recibidas
             field_names = ["NOMBRE", "APELLIDO", "DOCUMENTO", "NACIMIENTO", "NUMERO"]
-            for field_name in field_names:
-                # Leer 1 byte: longitud del campo
-                length_byte = self.read_exact(conn, 1)
-                field_length = length_byte[0]
 
-                # Leer el valor del campo (n bytes)
-                field_value_bytes = self.read_exact(conn, field_length)
-                field_value = field_value_bytes.decode("utf-8")
+            for _ in range(batch_size):  # Procesar cada apuesta en el batch
+                fields = {}
 
-                # Guardar el campo usando el nombre
-                fields[field_name] = field_value
+                try:
+                    for field_name in field_names:
+                        # Leer 1 byte: longitud del campo
+                        length_byte = self.read_exact(conn, 1)
+                        field_length = length_byte[0]
 
-            # Obtener los datos de los campos
-            dni = fields.get("DOCUMENTO", "")
-            numero = fields.get("NUMERO", "")
-            nombre = fields.get("NOMBRE", "")
-            apellido = fields.get("APELLIDO", "")
-            nacimiento = fields.get("NACIMIENTO", "")
-            
-            # Crear la apuesta
-            bet = Bet(agency=agency, first_name=nombre, last_name=apellido, document=dni, birthdate=nacimiento, number=numero)
-            
-            # Almacenar la apuesta
-            store_bets([bet]) 
+                        # Leer el valor del campo (n bytes)
+                        field_value_bytes = self.read_exact(conn, field_length)
+                        field_value = field_value_bytes.decode("utf-8")
 
-            logging.info(f'action: apuesta_almacenada | result: success | dni: {dni} | numero: {numero}')
+                        # Guardar el campo en el diccionario
+                        fields[field_name] = field_value
+                        
+
+                    # Crear el objeto Bet
+                    bet = Bet(
+                        agency=agency,
+                        first_name=fields["NOMBRE"],
+                        last_name=fields["APELLIDO"],
+                        document=fields["DOCUMENTO"],
+                        birthdate=fields["NACIMIENTO"],
+                        number=fields["NUMERO"]
+                    )
+
+                    bets.append(bet)  # Agregar la apuesta a la lista
+
+                except Exception as e:
+                    logging.error(f"Error procesando apuesta: {e}")
+                    
+                    # Si al menos una apuesta se recibió correctamente, la almacenamos
+                    if bets:
+                        store_bets(bets)
+                        logging.info(f"action: apuesta_recibida | result: fail | cantidad: {len(bets)}")
+                        conn.sendall(bytes([self.STATUS_ERROR]))  
+                    else:
+                        logging.info(f"action: apuesta_recibida | result: fail | cantidad: 0")
+                        conn.sendall(bytes([self.STATUS_ERROR]))  
+
+                    return  # Terminar el proceso
+
+            # Almacenar todas las apuestas del batch
+            store_bets(bets)  
+
+            logging.info(f"action: apuesta_recibida | result: success | cantidad: {batch_size}")
+
+            #for bet in bets:
+                #logging.info(f"action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}")
             
             # Enviar respuesta de éxito (1 byte: STATUS_SUCCESS)
             conn.sendall(bytes([self.STATUS_SUCCESS]))
-        
+
         except Exception as e:
-            print("Error al procesar la apuesta:", e)
+            print("Error al procesar las apuestas:", e)
             try:
-                # En caso de error, enviar STATUS_ERROR
-                conn.sendall(bytes([self.STATUS_ERROR]))
+                conn.sendall(bytes([self.STATUS_ERROR]))  # Enviar error si falla
             except Exception as inner_e:
                 print("Error al enviar respuesta de error:", inner_e)
         finally:
