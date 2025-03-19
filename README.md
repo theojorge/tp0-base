@@ -222,3 +222,95 @@ En la implementación del cliente, he agregado un manejador de señales que capt
 Para el servidor, he añadido una función manejadora de señales para SIGTERM y mejorado el método stop(). Este método ahora registra el inicio del cierre del socket, establece una bandera de ejecución en falso, cierra correctamente el socket utilizando SHUT_RDWR, y registra el cierre exitoso del socket, manejando también posibles errores durante este proceso.
 
 Además, se ha implementado un sistema de logging estructurado para todas las operaciones, que registra eventos como action: shutdown_initiated al recibir SIGTERM, así como action: close_connection y action: close_socket durante el cierre de recursos.
+
+### Ejercicio 4: Actualización
+
+Este ejercicio implementa una mejora en el mecanismo de cierre del servidor, reemplazando el enfoque anterior de `shutdown` + `sys.exit(0)` por un método más elegante que utiliza un socket ficticio (dummy socket) para interrumpir el bloqueo causado por la llamada `accept()`.
+
+#### Problema a Resolver
+
+El servidor TCP queda bloqueado en la llamada `accept()` cuando está esperando conexiones entrantes. Cuando se desea cerrar el servidor (por ejemplo, al recibir una señal `SIGTERM`), el hilo principal queda bloqueado en esta llamada, lo que impide un cierre limpio y ordenado del servidor.
+
+#### Solución Implementada
+
+Para resolver este problema, se ha implementado una técnica que consiste en:
+
+1.  Cambiar el estado interno del servidor (`self._running = False`).
+2.  Crear un socket dummy que se conecta al propio servidor.
+3.  Esta conexión hace que el método `accept()` se desbloquee.
+4.  Al salir del bloqueo, se verifica el estado `self._running` para decidir si continuar o terminar.
+
+#### Método de Detención del Servidor
+
+```python
+def stop(self):
+    """Stops the server and closes the socket"""
+    logging.info("action: close_socket | result: in_progress")
+    self._running = False
+    try:
+        dummy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_address = self._server_socket.getsockname()
+        dummy_socket.connect(('localhost', server_address[1]))
+    except OSError as e:
+        logging.error(f"action: close_socket | result: error | error: {e}")
+    finally:
+        try:
+            dummy_socket.shutdown(socket.SHUT_RDWR)
+        except OSError as e:
+            logging.error(f"action: shutdown_dummy_socket | result: error | error: {e}")
+        dummy_socket.close()
+```
+
+#### Bucle Principal del Servidor Mejorado
+
+```python
+while self._running:
+    try:
+        client_sock = self.__accept_new_connection()
+        if client_sock and self._running:
+            self.__handle_client_connection(client_sock)
+    except Exception as e:
+        logging.error(f"Error en el servidor: {e}")
+        self.stop()
+
+self._server_socket.shutdown(socket.SHUT_RDWR)
+self._server_socket.close()
+logging.info("action: close_socket | result: success")
+```
+
+#### Flujo de Ejecución
+
+1.  **Estado Normal de Ejecución**:
+
+    - El servidor se ejecuta en un bucle infinito `while self._running`.
+    - En cada iteración, se bloquea en `accept_new_connection()` esperando conexiones de clientes.
+
+2.  **Iniciando el Cierre**:
+
+    - Cuando se requiere cerrar el servidor, se llama al método `stop()`.
+    - El método cambia `self._running = False`.
+    - Crea un socket dummy y se conecta al servidor para desbloquear `accept()`.
+
+3.  **Procesando el Cierre**:
+
+    - La conexión dummy hace que el servidor salga del bloqueo en `accept()`.
+    - El bucle verifica `if client_sock and self._running`.
+    - Como `self._running` es `False`, no se procesa la conexión dummy.
+    - El bucle principal termina y se ejecutan las operaciones de limpieza.
+
+4.  **Limpieza Final**:
+    - Se cierra correctamente el socket del servidor con `shutdown()` y `close()`.
+    - Se registra el cierre exitoso en el log.
+
+#### Ventajas de Esta Implementación
+
+- **Cierre Limpio**: Permite que el servidor se cierre de manera ordenada.
+- **No Forzado**: Evita el uso de `sys.exit(0)` que termina abruptamente la ejecución.
+- **Robusto**: Maneja correctamente los errores que pueden ocurrir durante el cierre.
+- **Controlado**: Permite un adecuado manejo de recursos antes de finalizar.
+
+#### Consideraciones de Implementación
+
+- Es crucial verificar `self._running` después de `accept()` para ignorar la conexión del socket dummy.
+- El método `shutdown()` se utiliza tanto en el socket dummy como en el socket del servidor para asegurar un cierre completo.
+- Se implementan bloques `try/except` para manejar posibles errores durante el proceso de cierre.

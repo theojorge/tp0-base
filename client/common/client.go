@@ -39,7 +39,7 @@ func NewClient(config ClientConfig) *Client {
 // CreateClientSocket Initializes client socket. In case of
 // failure, error is printed in stdout/stderr and exit 1
 // is returned
-func (c *Client) createClientSocket() error {
+func (c *Client) createClientSocket() bool {
 	conn, err := net.Dial("tcp", c.config.ServerAddress)
 	if err != nil {
 		log.Criticalf(
@@ -47,9 +47,10 @@ func (c *Client) createClientSocket() error {
 			c.config.ID,
 			err,
 		)
+		return false
 	}
 	c.conn = conn
-	return nil
+	return true
 }
 
 // StartClientLoop Send messages to the client until some time threshold is met
@@ -59,7 +60,9 @@ func (c *Client) StartClientLoop() {
 	for msgID := 1; msgID <= c.config.LoopAmount; msgID++ {
 		// Create the connection the server in every loop iteration. 
 
-		c.createClientSocket()
+		if !c.createClientSocket() {
+           return  
+         }
 
 		// TODO: Modify the send to avoid short-write
 		fmt.Fprintf(
