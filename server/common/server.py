@@ -16,6 +16,7 @@ class Server:
         """Stops the server and closes the socket"""
         logging.info("action: close_socket | result: in_progress")
         self._running = False
+     
         try:
              dummy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
              server_address = self._server_socket.getsockname()
@@ -47,7 +48,8 @@ class Server:
          except Exception as e:
             logging.error(f"Error en el servidor: {e}")
             self.stop() 
-            
+        if client_sock:
+            client_sock.close()
         self._server_socket.shutdown(socket.SHUT_RDWR)
         self._server_socket.close()
         logging.info("action: close_socket | result: success")

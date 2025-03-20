@@ -11,6 +11,8 @@ import (
 const (
 	STATUS_SUCCESS = 0x01
 	STATUS_ERROR   = 0x00
+    BYTE_SIZE     = 255   // Máximo número de apuestas por batch
+	MAX_BUFFER_SIZE    = 8192  // Tamaño máximo del buffer en bytes
 )
 
 type ProtocolClient struct {
@@ -20,8 +22,8 @@ type ProtocolClient struct {
 func (p *ProtocolClient) serialize(bets []Bet, agencia int) ([]byte, int, []Bet, error) {
 	var buffer bytes.Buffer
 
-	if agencia < 0 || agencia > 255 {
-		return nil, 0, nil, fmt.Errorf("El número de agencia debe estar entre 0 y 255")
+	if agencia < 0 || agencia > BYTE_SIZE {
+		return nil, 0, nil, fmt.Errorf("El número de agencia debe estar entre 0 y %d", BYTE_SIZE)
 	}
 
 
@@ -35,17 +37,17 @@ func (p *ProtocolClient) serialize(bets []Bet, agencia int) ([]byte, int, []Bet,
 	validBets := 0 // Contador de apuestas válidas
     var remainingBets []Bet // Contador de apuestas sobrantes
 
-	if len(bets) > 255 {
-        log.Warningf("BatchSize (%d) excede el límite de 1 byte. Se procesarán solo 255 apuestas.", len(bets))
-		bets = bets[:255]
+	if len(bets) > BYTE_SIZE {
+        log.Warningf("BatchSize (%d) excede el límite de 1 byte. Se procesarán solo %d apuestas.", len(bets), BYTE_SIZE)
+		bets = bets[:BYTE_SIZE]
 		// Las apuestas que exceden 255 van directamente a remainingBets
-		remainingBets = bets[255:]
+		remainingBets = bets[BYTE_SIZE:]
 	}
 
 	// Función auxiliar para escribir los campos con su longitud (1 byte) y su valor
 	writeField := func(data string) bool {
 		fieldSize := len(data) + 1 // 1 byte para la longitud del campo
-		if buffer.Len()+fieldSize > 8192 {
+		if buffer.Len()+fieldSize > MAX_BUFFER_SIZE {
 			return false // Indica que no hay espacio suficiente
 		}
 
@@ -58,9 +60,9 @@ func (p *ProtocolClient) serialize(bets []Bet, agencia int) ([]byte, int, []Bet,
 	for i, bet := range bets {
 		startSize := buffer.Len() // Guardamos el tamaño antes de escribir la apuesta
 
-        if len(bet.Nombre) > 255 || len(bet.Apellido) > 255 || len(bet.DNI) > 255 ||
-			len(bet.Nacimiento) > 255 || len(bet.Numero) > 255 {
-			fmt.Println("Error: Un campo en esta apuesta excede los 255 bytes, se omite esta apuesta.")
+        if len(bet.Nombre) > BYTE_SIZE || len(bet.Apellido) > BYTE_SIZE || len(bet.DNI) > BYTE_SIZE ||
+			len(bet.Nacimiento) > BYTE_SIZE || len(bet.Numero) > BYTE_SIZE {
+			fmt.Printf("Error: Un campo en esta apuesta excede los %d bytes, se omite esta apuesta.", BYTE_SIZE)
 			continue // Salta esta apuesta y sigue con la siguiente
 		}
 

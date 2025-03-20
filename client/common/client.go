@@ -49,7 +49,7 @@ func NewClient(config ClientConfig) *Client {
 // failure, error is printed in stdout/stderr and exit 1
 // is returned
 func (c *Client) createClientSocket() bool {
-	conn, err := net.Dial("tcp", c.config.ServerAddress)
+	conn, err := net.DialTimeout("tcp", c.config.ServerAddress, 5*time.Second)
 	if err != nil {
 		log.Criticalf(
 			"action: connect | result: fail | client_id: %v | error: %v",
@@ -94,9 +94,9 @@ func (c *Client) StartClientLoop() {
             return
         }
 
-        log.Infof("Nuevas apuestas obtenidas: %d", len(newBets))
+        //log.Infof("Nuevas apuestas obtenidas: %d", len(newBets))
         bets := append(remainingBets, newBets...)
-        log.Infof("Total de apuestas después de combinar: %d", len(bets))
+        //log.Infof("Total de apuestas después de combinar: %d", len(bets))
 
         if len(bets) == 0 {
             break
@@ -109,7 +109,7 @@ func (c *Client) StartClientLoop() {
 
 	    // Sends the bet to the server and if it sends less than the batch it updates to not lose more bets.
 	    c.config.BatchSize, remainingBets = c.protocol.send_bets(bets, agencyID)
-        log.Infof("Apuestas restantes después de enviar: %d", len(remainingBets))
+        //log.Infof("Apuestas restantes después de enviar: %d", len(remainingBets))
       
         if c.sleepWithStopCheck(c.config.LoopPeriod) {
             return
