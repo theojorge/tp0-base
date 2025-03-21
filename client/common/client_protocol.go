@@ -39,9 +39,9 @@ func (p *ProtocolClient) serialize(bets []Bet, agencia int) ([]byte, int, []Bet,
 
 	if len(bets) > BYTE_SIZE {
         log.Warningf("BatchSize (%d) excede el límite de 1 byte. Se procesarán solo %d apuestas.", len(bets), BYTE_SIZE)
-		bets = bets[:BYTE_SIZE]
 		// Las apuestas que exceden 255 van directamente a remainingBets
 		remainingBets = bets[BYTE_SIZE:]
+        bets = bets[:BYTE_SIZE]
 	}
 
 	// Función auxiliar para escribir los campos con su longitud (1 byte) y su valor
