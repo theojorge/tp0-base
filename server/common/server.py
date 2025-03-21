@@ -1,6 +1,8 @@
 import socket
 import logging
-from .server_protocol import ServerProtocol  # Asegúrate de que la ruta sea correcta
+from .server_protocol import ServerProtocol, TIMEOUT_SECONDS  
+
+
 
 class Server:
     def __init__(self, port, listen_backlog):
@@ -62,24 +64,38 @@ class Server:
         client socket will also be closed
         """
         try:
-            self._protocol.handle_client(client_sock)
-           
+            all_notifications = self._protocol.handle_client(client_sock)
+            if all_notifications:
+                logging.info("action: sorteo | result: success")
+                self._protocol.perform_draw()
+                self.stop()
             
         except OSError as e:
             logging.error("action: receive_message | result: fail | error: {e}")
-        finally:
             client_sock.close()
 
     def __accept_new_connection(self):
         """
         Accept new connections
 
-        Function blocks until a connection to a client is made.
-        Then connection created is printed and returned
+        Function blocks until a connection to a client is made or a timeout occurs.
+        If timeout is reached, triggers the draw and returns None.
+        Otherwise, returns the client socket.
         """
-        
         # Connection arrived
         logging.info('action: accept_connections | result: in_progress')
-        c, addr = self._server_socket.accept()
-        logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-        return c
+        
+        self._server_socket.settimeout(TIMEOUT_SECONDS)  # Ajusta el tiempo según tus necesidades
+        
+        try:
+            c, addr = self._server_socket.accept()
+            logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+            return c
+        except socket.timeout:
+            logging.info('action: accept_connections | result: timeout | msg: No se recibieron más conexiones, procediendo con el sorteo')
+            self._protocol.perform_draw()
+            self.stop()  # Detener el servidor tras el sorteo
+            return None
+        finally:
+            # Restaurar el socket a modo bloqueante sin timeout para la próxima llamada
+            self._server_socket.settimeout(None)

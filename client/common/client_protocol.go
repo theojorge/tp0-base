@@ -39,9 +39,10 @@ func (p *ProtocolClient) serialize(bets []Bet, agencia int) ([]byte, int, []Bet,
 
 	if len(bets) > BYTE_SIZE {
         log.Warningf("BatchSize (%d) excede el límite de 1 byte. Se procesarán solo %d apuestas.", len(bets), BYTE_SIZE)
-		bets = bets[:BYTE_SIZE]
 		// Las apuestas que exceden 255 van directamente a remainingBets
 		remainingBets = bets[BYTE_SIZE:]
+        bets = bets[:BYTE_SIZE]
+		
 	}
 
 	// Función auxiliar para escribir los campos con su longitud (1 byte) y su valor
@@ -129,3 +130,83 @@ func (p *ProtocolClient) send_bets(bets []Bet, agencia int) (int, []Bet) {
         return 0, nil
 	}
 }
+
+func (p *ProtocolClient) notify_end_of_bets(agencia int) error {
+	// Crear un mensaje especial que indique fin de apuestas
+	// Usamos un buffer vacío con solo la agencia y un tamaño de batch 0
+	var buffer bytes.Buffer
+	
+	// Escribir el byte de agencia
+	buffer.WriteByte(byte(agencia))
+	
+	// Escribir 0 como tamaño del batch para indicar que es una notificación de fin
+	buffer.WriteByte(0)
+	
+	// Enviar los datos al servidor
+	_, err := p.conn.Write(buffer.Bytes())
+	if err != nil {
+		fmt.Println("Error al enviar notificación de fin:", err)
+		return err
+	}
+	
+	// Recibir confirmación del servidor (1 byte)
+	responseBuffer := make([]byte, 1)
+	n, err := p.conn.Read(responseBuffer)
+	if err != nil {
+		fmt.Println("Error al recibir confirmación de fin:", err)
+		return err
+	}
+	
+	// Verificar que se haya leído 1 byte
+	if n != 1 {
+		fmt.Println("Error: No se recibió la confirmación esperada")
+		return fmt.Errorf("confirmación incompleta")
+	}
+	
+	// Interpretar la respuesta del servidor
+	if responseBuffer[0] == STATUS_SUCCESS {
+		log.Infof("action: notificacion_fin | result: success | agencia: %d", agencia)
+		return nil
+	} else {
+		log.Infof("action: notificacion_fin | result: error | agencia: %d", agencia)
+		return fmt.Errorf("el servidor rechazó la notificación")
+	}
+}
+
+func (p *ProtocolClient) read_winners(agencia int) ([]string, error) {
+    var winners []string
+
+    // 1. Leer 1 byte: Cantidad de ganadores
+    countBuffer := make([]byte, 1)
+    _, err := p.conn.Read(countBuffer)
+    if err != nil {
+        fmt.Println("Error al recibir la cantidad de ganadores:", err)
+        return nil, err
+    }
+    count := int(countBuffer[0])
+
+    // 2. Leer cada DNI
+    for i := 0; i < count; i++ {
+        // Leer 1 byte: Longitud del DNI
+        lengthBuffer := make([]byte, 1)
+        _, err := p.conn.Read(lengthBuffer)
+        if err != nil {
+            fmt.Println("Error al recibir la longitud del DNI:", err)
+            return nil, err
+        }
+        dniLength := int(lengthBuffer[0])
+
+        // Leer el DNI completo
+        dniBuffer := make([]byte, dniLength)
+        _, err = p.conn.Read(dniBuffer)
+        if err != nil {
+            fmt.Println("Error al recibir el DNI:", err)
+            return nil, err
+        }
+        winners = append(winners, string(dniBuffer))
+    }
+
+    return winners, nil
+}
+
+

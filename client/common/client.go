@@ -10,13 +10,6 @@ import (
 
 var log = logging.MustGetLogger("log")
 
-const (
-	DefaultNombre     = "Santiago Lionel"
-	DefaultApellido   = "Lorca"
-	DefaultDocumento  = "30904465"
-	DefaultNacimiento = "1999-03-17"
-	DefaultNumero     = "7574"
-)
 
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
@@ -60,7 +53,6 @@ func (c *Client) createClientSocket() bool {
 	}
 	c.conn = conn
 	c.protocol = ProtocolClient{conn: c.conn,}
-
 	return true
 }
 
@@ -98,13 +90,26 @@ func (c *Client) StartClientLoop() {
         bets := append(remainingBets, newBets...)
         //log.Infof("Total de apuestas después de combinar: %d", len(bets))
 
-        if len(bets) == 0 {
-            break
-        }
-
         // Create the connection the server in every loop iteration. 
         if !c.createClientSocket() {
           return  
+        }
+
+        if len(bets) == 0 {
+            c.protocol.notify_end_of_bets(agencyID)
+            // Leer los ganadores después de notificar el fin de apuestas
+            winners, err := c.protocol.read_winners(agencyID)
+            if err != nil {
+                log.Errorf("Error al leer ganadores: %v", err)
+                return
+            }
+            log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", len(winners))
+            // Manejar la lista de ganadores según sea necesario
+            if len(winners) > 0 {
+                fmt.Println("Ganadores recibidos:", winners)
+            }
+
+            break
         }
 
 	    // Sends the bet to the server and if it sends less than the batch it updates to not lose more bets.

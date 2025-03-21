@@ -471,3 +471,122 @@ El sistema carga los archivos CSV de apuestas desde un directorio host `.data/` 
 - Cada cliente tiene acceso a su propio archivo de apuestas correspondiente.
 - Los archivos se mantienen persistentes fuera de los contenedores.
 - El formato del mapeo de volumen es: `./.data/agency-{N}.csv:/{csv_filename}`.
+
+### Ejercicio 7:
+
+Este ejercicio modifica un sistema cliente-servidor para manejar apuestas y realizar un sorteo. Los clientes notifican al servidor al terminar de enviar apuestas, y el servidor espera a que todas las agencias finalicen antes de proceder con el sorteo. Luego, los clientes consultan los ganadores de su agencia y registran los resultados en logs. El servidor utiliza las funciones `load_bets()` y `has_won()` para determinar ganadores, enviando solo los DNIs correspondientes a cada agencia.
+
+#### Características Principales
+
+- **Notificación de Fin**: Los clientes envían un mensaje con `batch_size = 0` al terminar de enviar apuestas y consultan los ganadores inmediatamente.
+- **Espera Dinámica**: El servidor registra las agencias vistas y espera todas las notificaciones antes de realizar el sorteo.
+
+- **Respuesta Específica**: Solo se envían los DNIs de los ganadores por agencia, sin realizar un broadcast.
+
+- **Logs**:
+
+  - Cliente: `action: consulta_ganadores | result: success | cant_ganadores: ${CANT}`.
+  - Servidor: `action: sorteo | result: success`.
+
+- **Restricción**: No se permiten consultas de ganadores antes de que todas las agencias notifiquen su fin.
+
+#### Implementación
+
+##### Cliente
+
+Los clientes están implementados en Go y se modificaron para notificar el fin de apuestas y consultar los ganadores.
+
+- **Notificación de Fin**: En `StartClientLoop`, cuando `len(bets) == 0`, se llama a `notify_end_of_bets(agencyID)` enviando el `agencyID` y `batch_size = 0`. Se espera confirmación (STATUS_SUCCESS).
+
+- **Consulta de Ganadores**: Tras la notificación, se invoca `read_winners(agencyID)` para leer la respuesta del servidor, que incluye la cantidad de ganadores y sus DNIs, registrando el resultado en el log.
+
+```go
+if len(bets) == 0 {
+    c.protocol.notify_end_of_bets(agencyID)
+    winners, err := c.protocol.read_winners(agencyID)
+    if err != nil {
+        log.Errorf("Error al leer ganadores: %v", err)
+        return
+    }
+    log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", len(winners))
+    break
+}
+
+func (p *ProtocolClient) notify_end_of_bets(agencia int) error {
+    var buffer bytes.Buffer
+    buffer.WriteByte(byte(agencia))
+    buffer.WriteByte(0) // Tamaño de batch 0 indica fin
+    _, err := p.conn.Write(buffer.Bytes())
+    // ... (lectura de confirmación)
+    log.Infof("action: notificacion_fin | result: success | agencia: %d", agencia)
+    return nil
+}
+
+func (p *ProtocolClient) read_winners(agencia int) ([]string, error) {
+    // Lee cantidad (1 byte) y DNIs (longitud + datos)
+    // ...
+}
+```
+
+##### Servidor
+
+El servidor está implementado en Python y se ajustó para esperar notificaciones, realizar el sorteo y responder con los ganadores.
+
+- **Registro Dinámico**: Utiliza `self.all_agencies` (un set) para rastrear las agencias vistas y `self.agency_sockets` para guardar los sockets de las agencias que envían `batch_size == 0`.
+
+- **Sorteo**: Ejecuta `perform_draw()` cuando `len(self.agency_sockets) >= len(self.all_agencies)`, utilizando `load_bets()` y `has_won()` para determinar los ganadores y notificar a cada agencia.
+
+- **Protocolo de Respuesta**: En el método `notify_all_agencies`, el servidor envía:
+  - 1 byte: Cantidad de ganadores.
+  - Por cada ganador: 1 byte (longitud del DNI) + bytes del DNI (codificado en UTF-8).
+
+```python
+class ServerProtocol:
+    def __init__(self):
+        self.agency_sockets = {}  # Sockets de agencias que terminaron
+        self.all_agencies = set()  # Todas las agencias vistas
+        self.draw_done = False
+        self.winners = {}
+
+    def handle_client(self, conn):
+        agency = self.read_exact(conn, 1)[0]
+        self.all_agencies.add(agency)  # Registrar agencia
+        batch_size = self.read_exact(conn, 1)[0]
+
+        if batch_size == 0:
+            self.agency_sockets[agency] = conn
+            conn.sendall(bytes([self.STATUS_SUCCESS]))
+            if len(self.agency_sockets) >= len(self.all_agencies) and not self.draw_done:
+                self.draw_done = True
+            return self.draw_done
+        # ... (procesamiento de apuestas)
+
+    def perform_draw(self):
+        all_bets = load_bets()
+        winners_by_agency = {}
+        for bet in all_bets:
+            if has_won(bet):
+                winners_by_agency.setdefault(bet.agency, []).append(bet.document)
+        self.winners = winners_by_agency
+        self.notify_all_agencies()
+```
+
+#### Flujo de Ejecución
+
+1. **Clientes envían apuestas**: Cada cliente envía batches de apuestas al servidor, que registra las agencias en `self.all_agencies`.
+
+2. **Notificación de Fin**: Cuando un cliente termina, envía `batch_size = 0`. El servidor guarda el socket en `self.agency_sockets` y envía una confirmación.
+
+3. **Sorteo**: Cuando todas las agencias han enviado su notificación, el servidor realiza el sorteo y registra `action: sorteo | result: success`.
+
+4. **Notificación de Ganadores**: El servidor envía a cada agencia conectada la cantidad de ganadores y sus DNIs específicos.
+
+5. **Clientes reciben resultados**: Cada cliente lee la respuesta y registra `action: consulta_ganadores | result: success | cant_ganadores: ${CANT}`.
+
+6. **Cierre**: El servidor cierra todas las conexiones y se detiene llamando a `self.stop()`.
+
+#### Limitaciones y Consideraciones
+
+- **Agencias Inactivas**: Si una agencia envía apuestas pero no notifica su fin, el servidor realizará el sorteo cuando se agote el tiempo de espera (timeout) mientras espera la última conexión.
+
+- **Conexiones Abiertas**: Los sockets se mantienen activos tras `batch_size = 0` hasta que se envían los resultados.
