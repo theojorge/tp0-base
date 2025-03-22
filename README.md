@@ -590,3 +590,96 @@ class ServerProtocol:
 - **Agencias Inactivas**: Si una agencia envía apuestas pero no notifica su fin, el servidor realizará el sorteo cuando se agote el tiempo de espera (timeout) mientras espera la última conexión.
 
 - **Conexiones Abiertas**: Los sockets se mantienen activos tras `batch_size = 0` hasta que se envían los resultados.
+
+### Ejercicio 8:
+
+Este ejercicio modifica el servidor para aceptar conexiones y procesar mensajes de múltiples clientes en paralelo utilizando multithreading en Python.
+
+#### Características Principales
+
+- **Procesamiento Paralelo**: El servidor utiliza hilos (`threading.Thread`) para manejar cada conexión de cliente de forma independiente, permitiendo procesar apuestas de múltiples agencias simultáneamente.
+
+- **Sincronización con Barrera**: Se emplea un `threading.Barrier` para asegurar que todos los subprocesos de clientes válidos esperen antes de realizar el sorteo (`perform_draw()`). La barrera se inicializa dinámicamente con `self._total_clients` al aceptar cada conexión.
+
+- **Manejo de Fallos**: Si un cliente falla al procesar apuestas (cuando `handle_client` retorna `False`), su subproceso en el servidor cierra el socket, espera al número original de participantes en la barrera (`self._total_clients`) y no ejecuta `perform_draw()`.
+
+- **Cierre Automático**: El servidor se detiene automáticamente después de que todos los subprocesos válidos completan el sorteo, utilizando un contador (`self._clients_processed`) que se incrementa tras `perform_draw()`. El último subproceso en terminar llama a `self.stop()`.
+
+#### Implementación
+
+##### Cliente
+
+Los clientes se modificaron para no tener que conectarse varias veces, realizando una única conexión.
+
+- **Conexión Única**: En `StartClientLoop`, se invoca `createClientSocket()` una sola vez en lugar de múltiples veces como se hacía anteriormente.
+
+- **Bloqueo Esperando los Ganadores**: Tras la notificación de fin de apuestas, se invoca `read_winners(agencyID)` para leer la respuesta del servidor. Dado que el SIGTERM no puede interrumpir este `recv` usando el canal de parada (`stopCh`), se aplica un `socket.close` al detener el cliente.
+
+##### Servidor
+
+El servidor utiliza multithreading para manejar conexiones en paralelo:
+
+- **Aceptación de Conexiones**: En el método `run()`, se aceptan conexiones en un bucle y se lanza un hilo por cada cliente:
+
+```python
+client_thread = threading.Thread(
+    target=self.__handle_client_connection,
+    args=(client_sock,),
+    daemon=True
+)
+client_thread.start()
+```
+
+- **Sincronización**: La barrera (`self._draw_barrier`) se crea dinámicamente con `Barrier(self._total_clients)` cada vez que se acepta un cliente, bajo la protección de `self._draw_lock`. Un contador (`self._clients_processed`) rastrea los subprocesos que completan `perform_draw()`. Cuando `self._clients_processed` es igual a `self._total_clients`, el último subproceso llama a `self.stop()`:
+
+```python
+with self._lock:
+    self._clients_processed += 1
+    if self._clients_processed == self._total_clients:
+        self.stop()
+```
+
+- **Procesamiento por Subproceso**: En `__handle_client_connection`, cada subproceso sigue este flujo:
+
+  1. Crea una instancia de `ServerProtocol` y ejecuta `handle_client()` para procesar apuestas.
+  2. Espera un breve retraso (`time.sleep(1)`) para simular procesamiento adicional o dar tiempo a otros subprocesos.
+  3. Participa en la barrera independientemente del resultado de `handle_client()`:
+
+```python
+logging.info(f'action: wait_for_barrier | result: in_progress | thread: {threading.current_thread().name}')
+self._draw_barrier.wait()  # Todos los threads esperan aquí
+logging.info(f'action: wait_for_barrier | result: success | thread: {threading.current_thread().name}')
+```
+
+4. Si `success` es `True`, realiza el sorteo; si `success` es `False`, omite el sorteo:
+
+```python
+if success:
+    logging.info("action: sorteo | result: success | thread: {}".format(threading.current_thread().name))
+    protocol.perform_draw()
+```
+
+- **Cierre del Servidor**: En `stop()`, se establece `self._running = False`, se aborta la barrera y se envía una conexión dummy para desbloquear `accept()`:
+
+```python
+with self._draw_lock:
+    if self._draw_barrier:
+        self._draw_barrier.abort()
+```
+
+#### Flujo de Ejecución
+
+1. **Aceptación**: El servidor acepta conexiones y lanza subprocesos para cada cliente.
+2. **Procesamiento**: Cada subproceso ejecuta `handle_client()` y espera en la barrera, independientemente del resultado.
+3. **Sorteo**: Los subprocesos con `success = True` (sin errores) ejecutan `perform_draw()` tras pasar la barrera.
+4. **Cierre**: El último subproceso exitoso incrementa `self._clients_processed` hasta `self._total_clients` y llama a `self.stop()`.
+
+#### Limitaciones y Consideraciones
+
+- **Global Interpreter Lock (GIL)**: El GIL limita la ejecución paralela de tareas CPU-bound en Python, pero este servidor es I/O-bound (lectura/escritura en sockets), por lo que el multithreading mejora el rendimiento al manejar múltiples conexiones simultáneamente.
+
+- **Subprocesos Bloqueados en la Barrera**: Cuando un cliente se cierra (por ejemplo, vía `Stop()`), su subproceso correspondiente en el servidor no termina hasta que todos los subprocesos lleguen a la barrera (`self._draw_barrier.wait()`). Esto significa que incluso si un cliente falla o se desconecta, su subproceso permanece vivo esperando la sincronización.
+
+- **Sincronización Dinámica**: La recreación de la barrera al aceptar cada cliente introduce riesgo de race condition si un subproceso espera en una barrera antigua mientras se crea una nueva. Por eso, hay un `sleep` antes del `wait` de la barrera para darle tiempo a los otros clientes a conectarse antes de que el primer cliente termine de enviar sus batches y entre en la barrera.
+
+- **Cierre de Subprocesos**: Los subprocesos daemon (`daemon=True`) terminan al cerrar el programa, y `thread.join(timeout=0.1)` en `run()` limita la espera a 0.1 segundos por subproceso para evitar bloqueos prolongados.

@@ -77,6 +77,11 @@ func (c *Client) StartClientLoop() {
     adjustedBatchSize := c.config.BatchSize
     var remainingBets []Bet
 
+    // Create the connection the server
+    if !c.createClientSocket() {
+    	return  
+    }
+
 	for {
         adjustedBatchSize = c.config.BatchSize - len(remainingBets)
 
@@ -90,13 +95,12 @@ func (c *Client) StartClientLoop() {
         bets := append(remainingBets, newBets...)
         //log.Infof("Total de apuestas después de combinar: %d", len(bets))
 
-        // Create the connection the server in every loop iteration. 
-        if !c.createClientSocket() {
-          return  
-        }
-
         if len(bets) == 0 {
-            c.protocol.notify_end_of_bets(agencyID)
+            err = c.protocol.notify_end_of_bets(agencyID)
+            if err != nil {
+                log.Errorf("Error al notificar fin de apuestas: %v", err)
+                return
+            }
             // Leer los ganadores después de notificar el fin de apuestas
             winners, err := c.protocol.read_winners(agencyID)
             if err != nil {
@@ -114,6 +118,9 @@ func (c *Client) StartClientLoop() {
 
 	    // Sends the bet to the server and if it sends less than the batch it updates to not lose more bets.
 	    c.config.BatchSize, remainingBets = c.protocol.send_bets(bets, agencyID)
+        if c.config.BatchSize == 0 {
+            return
+        }
         //log.Infof("Apuestas restantes después de enviar: %d", len(remainingBets))
       
         if c.sleepWithStopCheck(c.config.LoopPeriod) {
@@ -144,4 +151,5 @@ func (c *Client) sleepWithStopCheck(duration time.Duration) bool {
 
 func (c *Client) Stop() {
     close(c.stopCh)
+    c.conn.Close()
 }
