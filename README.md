@@ -683,3 +683,175 @@ with self._draw_lock:
 - **Sincronización Dinámica**: La recreación de la barrera al aceptar cada cliente introduce riesgo de race condition si un subproceso espera en una barrera antigua mientras se crea una nueva. Por eso, hay un `sleep` antes del `wait` de la barrera para darle tiempo a los otros clientes a conectarse antes de que el primer cliente termine de enviar sus batches y entre en la barrera.
 
 - **Cierre de Subprocesos**: Los subprocesos daemon (`daemon=True`) terminan al cerrar el programa, y `thread.join(timeout=0.1)` en `run()` limita la espera a 0.1 segundos por subproceso para evitar bloqueos prolongados.
+
+### Ejercicio 8: Actualización
+
+Este ejercicio modifica el servidor para aceptar conexiones y procesar mensajes de múltiples clientes en paralelo utilizando `multiprocessing`. Cada cliente se maneja en su propio proceso, y el servidor utiliza una barrera de sincronización para asegurar que todos los clientes estén listos antes de realizar el sorteo. Además, el servidor puede ser detenido de forma controlada mediante una señal SIGTERM, lo que asegura que todos los recursos sean liberados correctamente.
+
+#### Características
+
+- **Procesamiento en paralelo**: Cada cliente se maneja en un proceso independiente, lo que permite que múltiples clientes se conecten y procesen apuestas simultáneamente.
+
+- **Sincronización con Barrera**: Usamos `multiprocessing.Manager().Barrier` para asegurar que todos los procesos esperen antes de realizar el sorteo.
+
+- **Manejo de señales**: El servidor escucha señales del sistema como SIGTERM y detiene todos los procesos de clientes de manera ordenada.
+
+- **Cierre controlado**: El servidor y sus procesos se detienen correctamente, asegurando el cierre adecuado de conexiones y la liberación de recursos.
+
+#### Manejo de Señales (SIGTERM)
+
+Cuando el servidor recibe una señal SIGTERM, se activa un evento llamado `stop_event`. Este evento es utilizado por los procesos de cliente para saber cuándo deben detenerse. Al activarse el `stop_event`, todos los procesos de cliente terminan de manera controlada, cerrando sus conexiones y liberando recursos antes de finalizar.
+
+#### Flujo del Servidor
+
+1. **Recepción de Conexiones**: El servidor acepta conexiones de clientes en un bucle, creando un nuevo proceso para cada cliente.
+
+2. **Sincronización**: Cada proceso de cliente espera en una barrera hasta que todos los clientes estén listos. Esto asegura que el sorteo solo se realice cuando todos los clientes han terminado de enviar sus apuestas.
+
+3. **Manejo de Señales**: Si el servidor recibe una señal SIGTERM, se activa el `stop_event`, que indica a los procesos de cliente que deben finalizar.
+
+4. **Cierre de Conexiones**: Al detenerse, el servidor cierra todas las conexiones de clientes y detiene cualquier proceso que aún esté en ejecución.
+
+#### Detalles del Código Modificado
+
+**Servidor (con Multiprocessing)**
+
+```python
+class Server:
+    def __init__(self, port, listen_backlog):
+        # Inicializar socket del servidor
+        self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._server_socket.bind(('', port))
+        self._server_socket.listen(listen_backlog)
+        self._running = multiprocessing.Value('b', True)  # Valor compartido para indicar si el server está corriendo
+        self._client_processes = []
+        self._lock = Lock()
+
+        # Contadores compartidos
+        self._clients_processed = Value('i', 0)
+        self._total_clients = Value('i', 0)
+        self._stop_event = Event()
+
+        # Barrera de sincronización
+        self._draw_barrier = Barrier(listen_backlog)  # Se configura con el máximo de clientes esperados
+
+    def stop(self):
+        """Detiene el servidor y cierra el socket"""
+        with self._lock:
+            if not self._running.value:
+                return
+            self._running.value = False  # Indicar que el servidor debe detenerse
+            self._stop_event.set()
+        logging.info("action: close_socket | result: in_progress")
+
+        # Romper la barrera si es necesario
+        try:
+            self._draw_barrier.abort()
+        except Exception:
+            pass
+
+        try:
+            # Enviar conexión dummy para desbloquear `accept()`
+            dummy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_address = self._server_socket.getsockname()
+            dummy_socket.connect(('localhost', server_address[1]))
+        except OSError as e:
+            logging.error(f"action: close_socket | result: error | error: {e}")
+        finally:
+            try:
+                dummy_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            dummy_socket.close()
+
+    def run(self):
+        """Bucle principal del servidor con multiprocessing."""
+        try:
+            while self._running.value:
+                try:
+                    client_sock, addr = self._server_socket.accept()
+
+                    if not self._running.value:
+                        client_sock.close()
+                        for process in self._client_processes:
+                         process.join(timeout=0.1)
+                        break
+
+                    logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+
+                    # Incrementar contador de clientes
+                    with self._lock:
+                        self._total_clients.value += 1
+
+                    # Crear y lanzar un proceso para manejar al cliente
+                    client_process = multiprocessing.Process(
+                        target=self.__handle_client_connection,
+                        args=(client_sock, self._stop_event)
+                    )
+                    client_process.daemon = True
+                    client_process.start()
+
+                    with self._lock:
+                        self._client_processes.append(client_process)
+
+
+    def __handle_client_connection(self, client_sock, stop_event):
+        """Función que maneja la conexión de un cliente en un proceso separado."""
+        protocol = None
+        try:
+            protocol = ServerProtocol(client_sock)
+             while not success:
+                success, error = protocol.handle_client() # Nuevo método paso a paso
+                if error is not None:  # Si hay un error, salir del bucle
+                  break
+                if stop_event.is_set():
+                    return
+
+
+            # Esperar en la barrera después de `handle_client`
+            logging.info(f'action: wait_for_barrier | result: in_progress | process: {multiprocessing.current_process().name}')
+            try:
+                self._draw_barrier.wait()
+                logging.info(f'action: wait_for_barrier | result: success | process: {multiprocessing.current_process().name}')
+            except Exception as e:
+                logging.warning(f'action: wait_for_barrier | result: aborted | process: {multiprocessing.current_process().name}')
+                return
+            # Hacer el sorteo y devolver ganadores al pasar la barrera
+            if success:
+                logging.info(f"action: sorteo | result: success | process: {multiprocessing.current_process().name}")
+                protocol.perform_draw()
+                protocol.notify_agency()
+
+            # Incrementar el contador de clientes procesados y decidir si detener
+            should_stop = False
+            with self._lock:
+                self._clients_processed.value += 1
+                if self._clients_processed.value == self._total_clients.value:
+                    should_stop = True
+
+            # Activar el evento que frena el proceso padre en caso de ser el ultimo proceso
+            if should_stop:
+                logging.info(f'action: stop | result: in_progress | process: {multiprocessing.current_process().name}')
+                self.stop()
+```
+
+#### Beneficios de la Actualización
+
+- **Paralelismo Real**: Al utilizar `multiprocessing` en lugar de `threading`, los clientes se ejecutan en procesos separados que aprovechan múltiples núcleos del CPU. Esto es especialmente importante en CPython, donde el Global Interpreter Lock (GIL) limita la ejecución paralela de hilos dentro de un mismo proceso. El GIL es un mutex que protege el acceso a objetos de Python, evitando condiciones de carrera y asegurando seguridad en hilos, pero impide que programas multihilo aprovechen al máximo sistemas multinúcleo para tareas intensivas en CPU. En cambio, `multiprocessing` crea procesos independientes, cada uno con su propio intérprete de Python y sin compartir el GIL, lo que permite un verdadero paralelismo y mejora el rendimiento en escenarios con múltiples conexiones de clientes.
+
+- **Robustez**: `multiprocessing` aísla los procesos de cliente, por lo que un fallo en uno no afecta a los demás ni al servidor principal, a diferencia de los hilos, que comparten el mismo espacio de memoria y pueden ser más propensos a errores en presencia del GIL.
+
+- **Manejo de Concurrencia Mejorado**: La sincronización a través de `multiprocessing.Manager().Barrier` garantiza que todos los procesos esperen hasta que los clientes estén listos, proporcionando un control robusto y predecible del flujo del sorteo.
+
+#### Consideraciones y Limitaciones
+
+- **Mayor Sobrecarga de Memoria**: `multiprocessing` crea procesos completos, que son más pesados que los hilos, lo que puede aumentar el uso de memoria si se manejan muchos clientes simultáneamente. Esto es un tradeoff aceptable para evitar las limitaciones del GIL en CPython.
+
+- **Comunicación entre Procesos**: A diferencia de los hilos, los procesos no comparten memoria directamente, por lo que se utilizan herramientas como `multiprocessing.Queue` o `multiprocessing.Value` para la comunicación, añadiendo algo de complejidad pero asegurando independencia del GIL.
+
+- **Cierre Correcto de Procesos**: Es crucial garantizar que todos los procesos se cierren adecuadamente al detener el servidor, lo cual puede ser más desafiante que con hilos, pero se maneja mediante el uso de `stop_event` y la limpieza ordenada de recursos.
+
+#### Conclusión
+
+El cambio de `threading` a `multiprocessing` se motivó principalmente por las limitaciones del GIL en CPython, que impide el paralelismo real en programas multihilo para tareas intensivas en CPU. Aunque operaciones como I/O (comunes en este servidor) ocurren fuera del GIL, el uso de hilos seguía restringido por la necesidad de sincronización y la posible contención del GIL en escenarios con muchos clientes. Al adoptar `multiprocessing`, logramos aprovechar mejor los recursos de hardware, mejorar la escalabilidad y garantizar una ejecución concurrente más robusta. Si bien esto introduce mayor complejidad en la gestión de procesos y recursos compartidos, los beneficios en rendimiento y estabilidad son sustanciales para aplicaciones que manejan múltiples conexiones de cliente simultáneamente.

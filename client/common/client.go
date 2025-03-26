@@ -77,6 +77,12 @@ func (c *Client) StartClientLoop() {
     adjustedBatchSize := c.config.BatchSize
     var remainingBets []Bet
 
+    defer func() {
+        if c.conn != nil {
+            c.conn.Close()
+        }
+    }()
+
     // Create the connection the server
     if !c.createClientSocket() {
     	return  
@@ -151,5 +157,14 @@ func (c *Client) sleepWithStopCheck(duration time.Duration) bool {
 
 func (c *Client) Stop() {
     close(c.stopCh)
-    c.conn.Close()
+    if c.conn != nil {
+        c.conn.SetReadDeadline(time.Now())
+        time.Sleep(1 * time.Second)
+        // Cerrar conexión
+        if err := c.conn.Close(); err != nil {
+            log.Infof("Error al cerrar conexión: %v", err)
+        }
+    
+        c.conn = nil
+    }
 }
