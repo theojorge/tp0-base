@@ -3,7 +3,6 @@ import logging
 import multiprocessing
 from multiprocessing import Lock, Barrier, Value, Event
 from .server_protocol import ServerProtocol, TIMEOUT_SECONDS
-import time
 
 class Server:
     def __init__(self, port, listen_backlog):
@@ -121,6 +120,9 @@ class Server:
             success = False
             while not success:
                 success, error = protocol.handle_client() # Nuevo método paso a paso
+                with self._lock:
+                    protocol.store_bets()
+                   
                 if error is not None:  # Si hay un error, salir del bucle 
                   break  
                 if stop_event.is_set():
@@ -138,7 +140,8 @@ class Server:
 
             if success:
                 logging.info(f"action: sorteo | result: success | process: {multiprocessing.current_process().name}")
-                protocol.perform_draw()
+                with self._lock:
+                    protocol.perform_draw()
                 protocol.notify_agency()
                 
             

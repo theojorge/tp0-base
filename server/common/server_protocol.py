@@ -3,147 +3,109 @@ from .utils import store_bets, Bet, load_bets, has_won
 
 TIMEOUT_SECONDS = 500
 
-class ServerProtocol:
-    # Constantes para el estado de respuesta
-    STATUS_SUCCESS = 0x01
-    STATUS_ERROR   = 0x00
-    
-    def __init__(self, conn):
-        # Control para el sorteo
-        self.agency = None # Agencia que envio la notificacion de fin de sorteo
-        self.conn = conn # Conexion con la agencia
-        self.winners = []  # Lista para almacenar ganadores 
-
-    def read_exact(self, n):
+def short_write(conn, data: bytes):
+    """Envía todos los bytes de `data` al socket `conn`, asegurando que no haya escrituras parciales."""
+    total_sent = 0
+    while total_sent < len(data):
+        try:
+            sent = conn.send(data[total_sent:])
+            if sent == 0:
+                raise RuntimeError("Conexión cerrada inesperadamente")
+            total_sent += sent
+        except Exception as e:
+            raise RuntimeError(f"Error al escribir en el socket: {e}")
+        
+def read_exact(conn, n):
         """Lee exactamente n bytes de la conexión, evitando short read."""
         data = b""
         while len(data) < n:
-            packet = self.conn.recv(n - len(data))
+            packet = conn.recv(n - len(data))
             if not packet:
                 raise Exception("Conexión cerrada antes de leer todos los bytes")
             data += packet
         return data
 
+class ServerProtocol:
+    STATUS_SUCCESS = 0x01
+    STATUS_ERROR = 0x00
+
+    def __init__(self, conn):
+        self.agency = None
+        self.conn = conn
+        self.winners = []
+        self.bets = [] 
+
     def handle_client(self):
-        """Procesa la conexión del cliente leyendo apuestas en batch continuamente."""
         self.conn.settimeout(TIMEOUT_SECONDS)
         try:
-            # Leer 1 byte: Agencia
-            agency_byte = self.read_exact(1) 
-            agency = agency_byte[0]
+            agency = read_exact(self.conn, 1)[0]
             if self.agency is None:
-                self.agency = agency  # Establecer la agencia la primera vez
+                self.agency = agency
             elif self.agency != agency:
-                raise Exception(f"Agencia inconsistente: esperada {self.agency}, recibida {agency}")
+                raise RuntimeError(f"Agencia inconsistente: esperada {self.agency}, recibida {agency}")
 
-            # Leer 1 byte: Batch Size (Cantidad de apuestas en el mensaje)
-            batch_size_byte = self.read_exact(1)
-            batch_size = batch_size_byte[0]
-
-            # Notificación de fin de apuestas
+            batch_size = read_exact(self.conn, 1)[0]
             if batch_size == 0:
                 logging.info(f"action: notificacion_fin | result: success | agencia: {agency}")
-                
-                # Enviar confirmación
-                self.conn.sendall(bytes([self.STATUS_SUCCESS]))
+                short_write(self.conn, bytes([self.STATUS_SUCCESS]))
+                return True, None
 
-                return True, None  # Retornar True y sin error
-
-            bets = []  # Lista para almacenar todas las apuestas recibidas
+    
             field_names = ["NOMBRE", "APELLIDO", "DOCUMENTO", "NACIMIENTO", "NUMERO"]
 
-            for _ in range(batch_size):  # Procesar cada apuesta en el batch
+            for _ in range(batch_size):
                 fields = {}
                 try:
                     for field_name in field_names:
-                        # Leer 1 byte: longitud del campo
-                        length_byte = self.read_exact(1)
-                        field_length = length_byte[0]
-
-                        # Leer el valor del campo (n bytes)
-                        field_value_bytes = self.read_exact(field_length)
-                        field_value = field_value_bytes.decode("utf-8")
-
-                        # Guardar el campo en el diccionario
+                        field_length = read_exact(self.conn, 1)[0]
+                        field_value = read_exact(self.conn, field_length).decode("utf-8")
                         fields[field_name] = field_value
-
-                    # Crear el objeto Bet
-                    bet = Bet(
+                    
+                    self.bets.append(Bet(
                         agency=agency,
                         first_name=fields["NOMBRE"],
                         last_name=fields["APELLIDO"],
                         document=fields["DOCUMENTO"],
                         birthdate=fields["NACIMIENTO"],
                         number=fields["NUMERO"]
-                    )
-                    bets.append(bet)  # Agregar la apuesta a la lista
-
+                    ))
                 except Exception as e:
                     logging.error(f"Error procesando apuesta: {e}")
-                    if bets:
-                        store_bets(bets)
-                        logging.info(f"action: apuesta_recibida | result: fail | cantidad: {len(bets)}")
-                    else:
-                        logging.info(f"action: apuesta_recibida | result: fail | cantidad: 0")
-                    self.conn.sendall(bytes([self.STATUS_ERROR]))
+                    short_write(self.conn, bytes([self.STATUS_ERROR]))
                     self.conn.close()
-                    return False, e  # Retornar False y el error
-
-            # Almacenar todas las apuestas del batch
-            store_bets(bets)
+                    return False, e
             logging.info(f"action: apuesta_recibida | result: success | cantidad: {batch_size}")
-
-            # Enviar respuesta de éxito (1 byte: STATUS_SUCCESS)
-            self.conn.sendall(bytes([self.STATUS_SUCCESS]))
-            return False, None  # Retornar False y sin error
+            short_write(self.conn, bytes([self.STATUS_SUCCESS]))
+            return False, None
 
         except Exception as e:
             logging.error(f"Error al procesar las apuestas: {e}")
-            try:
-                self.conn.sendall(bytes([self.STATUS_ERROR]))  # Enviar error si falla
-            except Exception as inner_e:
-                logging.error(f"Error al enviar respuesta de error: {inner_e}")
-            finally:
-                self.conn.close()  # Solo cerrar en caso de excepción grave
-                return False, e  # Retornar False y el error
-        
-        
+            short_write(self.conn, bytes([self.STATUS_ERROR]))
+            self.conn.close()
+            return False, e
+
+    def store_bets(self):
+        store_bets(self.bets)
+        self.bets = []
+   
     def perform_draw(self):
-        """Realiza el sorteo para las apuestas de esta agencia."""
-        # Cargar todas las apuestas (se asume que load_bets puede filtrar por agencia si es necesario)
         all_bets = load_bets()
-
-        # Filtrar solo las apuestas de esta agencia
         agency_bets = [bet for bet in all_bets if bet.agency == self.agency]
-
-        # Verificar cada apuesta de la agencia
         self.winners = [bet.document for bet in agency_bets if has_won(bet)]
-
-        
-
+    
     def notify_agency(self):
-        """Envía los resultados del sorteo a la agencia conectada."""
         try:
             if self.conn.fileno() == -1:
                 logging.error(f"Conexión ya cerrada, no se puede notificar a la agencia {self.agency}.")
                 return 
-            # 1. Obtener ganadores para esta agencia
+            
             agency_winners = self.winners
-            # 2. Enviar cantidad de ganadores (1 byte)
-            self.conn.sendall(bytes([len(agency_winners)]))
+            short_write(self.conn, bytes([len(agency_winners)]))
 
-            # 3. Enviar cada DNI
             for dni in agency_winners:
-                self.conn.sendall(bytes([len(dni)]))  # Enviar longitud del DNI
-                self.conn.sendall(dni.encode("utf-8"))  # Enviar DNI
-        
+                short_write(self.conn, bytes([len(dni)]))
+                short_write(self.conn, dni.encode("utf-8"))
         except Exception as e:
             logging.error(f"Error al notificar a la agencia {self.agency}: {e}")
-          
         finally:
-           if self.conn:
-            self.conn.close()  # Cerrar la conexión después de enviar el resultado
- 
-        
-        
-
+            self.conn.close()

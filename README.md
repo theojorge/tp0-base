@@ -855,3 +855,119 @@ class Server:
 #### Conclusión
 
 El cambio de `threading` a `multiprocessing` se motivó principalmente por las limitaciones del GIL en CPython, que impide el paralelismo real en programas multihilo para tareas intensivas en CPU. Aunque operaciones como I/O (comunes en este servidor) ocurren fuera del GIL, el uso de hilos seguía restringido por la necesidad de sincronización y la posible contención del GIL en escenarios con muchos clientes. Al adoptar `multiprocessing`, logramos aprovechar mejor los recursos de hardware, mejorar la escalabilidad y garantizar una ejecución concurrente más robusta. Si bien esto introduce mayor complejidad en la gestión de procesos y recursos compartidos, los beneficios en rendimiento y estabilidad son sustanciales para aplicaciones que manejan múltiples conexiones de cliente simultáneamente.
+
+## Funcionamiento general
+
+![Funcionamiento protocolo](protocol.png)
+
+![Funcionamiento procesos](multiprocessing.png)
+
+Estos Bosquejos del sistema mostrados al corrector, los agrego porque aportan a entender como funciona la comunicación y sincronización del proyecto.
+
+## Última actualización
+
+### Cambios Principales - Comunicación
+
+**short_write (Cliente y Servidor)**  
+**Objetivo**: Asegurar que todos los bytes de datos se envíen al socket sin que ocurran escrituras parciales. En caso de que la escritura se interrumpa, se reintenta hasta que se envíen todos los bytes.
+
+**Implementación**:
+
+```python
+def short_write(conn, data: bytes):
+    total_sent = 0
+    while total_sent < len(data):
+        try:
+            sent = conn.send(data[total_sent:])
+            if sent == 0:
+                raise RuntimeError("Conexión cerrada inesperadamente")
+            total_sent += sent
+        except Exception as e:
+            raise RuntimeError(f"Error al escribir en el socket: {e}")
+```
+
+**read_exact (Cliente)**  
+**Objetivo**: Leer exactamente el número de bytes esperado del socket, sin lecturas parciales. Si se cierra la conexión antes de que se haya leído todo, se lanza una excepción.
+
+**Implementación**:
+
+```python
+def read_exact(conn, n):
+    data = b""
+    while len(data) < n:
+        packet = conn.recv(n - len(data))
+        if not packet:
+            raise Exception("Conexión cerrada antes de leer todos los bytes")
+        data += packet
+    return data
+```
+
+#### Cambios en el Cliente
+
+El cliente utiliza ambas funciones `short_write` y `read_exact` para manejar la comunicación con el servidor. El cliente realiza las siguientes acciones:
+
+- **Lectura exacta de datos**: El cliente lee los datos recibidos del servidor usando `read_exact` para asegurarse de que no haya lecturas parciales.
+- **Escritura de datos al servidor**: El cliente usa `short_write` para enviar datos al servidor, garantizando que no haya escrituras parciales, incluso si la conexión es interrumpida.
+
+#### Cambios en el Servidor
+
+El servidor solo utiliza la función `short_write` para enviar datos de vuelta al cliente. La función `short_write` se asegura de que todos los bytes de datos sean enviados correctamente sin interrumpir la conexión.
+
+### Cambios Principales - Sincronización
+
+#### 1. Uso de Lock en la Escritura y Lectura de Archivos
+
+El proceso ahora utiliza un `Lock` para garantizar que las funciones que almacenan apuestas (`store_bets`) y realizan el sorteo (`perform_draw`) no sean ejecutadas por múltiples procesos al mismo tiempo. Esto previene que los datos en el archivo se corrompan por accesos concurrentes.
+
+#### 2. Proceso de Manejo de Conexiones con Lock
+
+Cada proceso que maneja una conexión cliente utiliza el `Lock` antes de guardar las apuestas o realizar el sorteo para asegurarse de que solo un proceso tenga acceso a la operación crítica en cualquier momento.
+
+**Ejemplo de Uso de Lock**:
+Cuando un cliente envía apuestas, el servidor realiza una serie de pasos secuenciales para procesar la información. Durante el procesamiento de apuestas y el sorteo, se asegura de que no haya accesos concurrentes utilizando un `Lock`.
+
+**Flujo de la Función en el Servidor**:
+
+```python
+while not success:
+    success, error = protocol.handle_client()  # Nuevo método paso a paso
+
+    # Uso del Lock antes de almacenar apuestas
+    with self._lock:
+        protocol.store_bets()
+
+    if error is not None:  # Si hay un error, salir del bucle
+        break
+    if stop_event.is_set():
+        return
+
+# Esperar en la barrera después de `handle_client`
+logging.info(f'action: wait_for_barrier | result: in_progress | process: {multiprocessing.current_process().name}')
+try:
+    self._draw_barrier.wait()
+    logging.info(f'action: wait_for_barrier | result: success | process: {multiprocessing.current_process().name}')
+except Exception as e:
+    logging.warning(f'action: wait_for_barrier | result: aborted | process: {multiprocessing.current_process().name}')
+    return
+
+if success:
+    logging.info(f"action: sorteo | result: success | process: {multiprocessing.current_process().name}")
+
+    # Uso del Lock antes de realizar el sorteo
+    with self._lock:
+        protocol.perform_draw()
+
+    protocol.notify_agency()
+```
+
+#### 3. Explicación de los Componentes del Lock
+
+- **self.\_lock**: Es una instancia del objeto `Lock` de `multiprocessing`. El `Lock` asegura que solo un proceso tenga acceso a la sección crítica del código (en este caso, operaciones de lectura y escritura sobre los archivos de apuestas) en cualquier momento.
+- **with self.\_lock**: Usamos la declaración `with` para adquirir el `Lock` de manera segura. Esto garantiza que el `Lock` se libere automáticamente una vez que el bloque de código haya finalizado, incluso si ocurre una excepción. Esto reduce el riesgo de bloqueos permanentes.
+- **protocol.store_bets() y protocol.perform_draw()**: Estas funciones están protegidas por el `Lock`, lo que asegura que una vez que un proceso comienza a escribir en el archivo o realizar el sorteo, ningún otro proceso podrá acceder a esas funciones hasta que el `Lock` sea liberado.
+
+#### Beneficios de la Implementación del Lock
+
+- **Prevención de Condiciones de Carrera**: Al utilizar un `Lock` en las operaciones críticas, aseguramos que solo un proceso pueda acceder a la función en un momento dado. Esto evita que múltiples procesos intenten escribir o leer desde el archivo al mismo tiempo, lo que podría causar datos corruptos.
+- **Integridad de los Datos**: Garantiza que las apuestas se guarden correctamente en el archivo y que el sorteo se realice de forma consistente, sin interferencias de otros procesos.
+- **Facilidad de Mantenimiento**: El uso de un `Lock` simplifica la gestión de acceso a los recursos compartidos, lo que facilita la comprensión y el mantenimiento del código, especialmente cuando se tiene un sistema basado en múltiples procesos.
